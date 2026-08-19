@@ -79,6 +79,15 @@ public class ForwardIndexConfig extends IndexConfig {
     return new Builder(EncodingType.DICTIONARY).withDisabled(true).build();
   }
 
+  /// Writer version used for codec-pipeline forward indexes. Legacy fixed-byte writers
+  /// accept arbitrary versions greater than or equal to 4, so version 7 alone does not identify
+  /// this format; readers also require the explicit codec-pipeline header magic.
+  ///
+  /// **The version and structural header marker together are the frozen on-disk identifier.**
+  /// Version 7 must never be used alone to dispatch this format because legacy fixed-byte writers
+  /// can also emit that value. A new format must define an unambiguous discriminator.
+  public static final int CODEC_PIPELINE_WRITER_VERSION = 7;
+
   private final EncodingType _encodingType;
   @Nullable
   private final CompressionCodec _compressionCodec;
@@ -220,6 +229,10 @@ public class ForwardIndexConfig extends IndexConfig {
   }
 
   /// Returns the structurally normalized codec specification, or `null` for the legacy compression path.
+  ///
+  /// Any non-null specification selects the V7 on-disk format. Before enabling it, upgrade every component that may
+  /// build or read segments. Before rolling those components back, remove the specification and rewrite affected V7
+  /// forward indexes into a legacy format.
   @Nullable
   public String getCodecSpec() {
     return _codecSpec;

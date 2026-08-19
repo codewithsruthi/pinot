@@ -61,6 +61,7 @@ import org.apache.pinot.segment.spi.index.StandardIndexes;
 import org.apache.pinot.segment.spi.index.metadata.SegmentMetadataImpl;
 import org.apache.pinot.segment.spi.index.reader.Dictionary;
 import org.apache.pinot.segment.spi.index.reader.ForwardIndexReader;
+import org.apache.pinot.segment.spi.index.reader.ForwardIndexReaderContext;
 import org.apache.pinot.segment.spi.index.reader.InvertedIndexReader;
 import org.apache.pinot.segment.spi.store.SegmentDirectory;
 import org.apache.pinot.segment.spi.utils.SegmentMetadataUtils;
@@ -2832,6 +2833,80 @@ public class ForwardIndexHandlerTest {
         assertEquals(actual.getMaxRowLengthInBytes(), expected.getMaxRowLengthInBytes());
       }
     }
+  }
+
+  /// Exercises the complete reload lifecycle with real segment files: legacy to V7 for even a
+  /// compression-only codecSpec, unchanged V7, V7 spec change, and rollback to a legacy format.
+  @Test
+  public void testCodecSpecReloadLifecycle()
+      throws Exception {
+    _fieldConfigMap.put(DIM_LZ4_INTEGER, rawFieldConfigWithCodecSpec(DIM_LZ4_INTEGER, "LZ4"));
+    applyCodecRewrite(DIM_LZ4_INTEGER);
+    assertRawForwardIndexState(DIM_LZ4_INTEGER, "LZ4", null);
+
+    // The stored canonical spec matches, so a second reload is a no-op.
+    try (SegmentDirectory segmentDirectory = new SegmentLocalFSDirectory(INDEX_DIR, ReadMode.mmap);
+        SegmentDirectory.Writer writer = segmentDirectory.createWriter()) {
+      _segmentDirectory = segmentDirectory;
+      _writer = writer;
+      assertFalse(computeOperations().containsKey(DIM_LZ4_INTEGER));
+    }
+
+    _fieldConfigMap.put(DIM_LZ4_INTEGER, rawFieldConfigWithCodecSpec(DIM_LZ4_INTEGER, "DELTA,LZ4"));
+    applyCodecRewrite(DIM_LZ4_INTEGER);
+    assertRawForwardIndexState(DIM_LZ4_INTEGER, "DELTA,LZ4", null);
+
+    _fieldConfigMap.put(DIM_LZ4_INTEGER,
+        new FieldConfig(DIM_LZ4_INTEGER, FieldConfig.EncodingType.RAW, List.of(), CompressionCodec.SNAPPY, null));
+    applyCodecRewrite(DIM_LZ4_INTEGER);
+    assertRawForwardIndexState(DIM_LZ4_INTEGER, null, ChunkCompressionType.SNAPPY);
+  }
+
+  private void applyCodecRewrite(String column)
+      throws Exception {
+    try (SegmentDirectory segmentDirectory = new SegmentLocalFSDirectory(INDEX_DIR, ReadMode.mmap);
+        SegmentDirectory.Writer writer = segmentDirectory.createWriter()) {
+      _segmentDirectory = segmentDirectory;
+      _writer = writer;
+      ForwardIndexHandler handler = createForwardIndexHandler();
+      assertEquals(handler.computeOperations(writer),
+          Map.of(column, List.of(ForwardIndexHandler.Operation.CHANGE_INDEX_COMPRESSION_TYPE)));
+      handler.updateIndices(writer);
+      handler.postUpdateIndicesCleanup(writer);
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private void assertRawForwardIndexState(String column, @Nullable String codecSpec,
+      @Nullable ChunkCompressionType compressionType)
+      throws Exception {
+    try (SegmentDirectory segmentDirectory = new SegmentLocalFSDirectory(INDEX_DIR, ReadMode.mmap);
+        SegmentDirectory.Reader segmentReader = segmentDirectory.createReader()) {
+      ColumnMetadata metadata = segmentDirectory.getSegmentMetadata().getColumnMetadataFor(column);
+      IndexReaderFactory<ForwardIndexReader> readerFactory = StandardIndexes.forward().getReaderFactory();
+      try (ForwardIndexReader<ForwardIndexReaderContext> forwardReader = readerFactory.createIndexReader(segmentReader,
+          createFieldIndexConfigsFromMetadata(metadata), metadata);
+          ForwardIndexReaderContext context = forwardReader.createContext()) {
+        assertEquals(forwardReader.getCodecSpec(), codecSpec);
+        assertEquals(forwardReader.getCompressionType(), compressionType);
+        for (int docId = 0; docId < TEST_DATA.size(); docId++) {
+          int expected = ((Number) TEST_DATA.get(docId).getValue(column)).intValue();
+          assertEquals(forwardReader.getInt(docId, context), expected,
+              "Value changed during codec reload at docId " + docId);
+        }
+      }
+    }
+  }
+
+  private static FieldConfig rawFieldConfigWithCodecSpec(String column, String codecSpec) {
+    ObjectNode forward = JsonUtils.newObjectNode();
+    forward.put("codecSpec", codecSpec);
+    ObjectNode indexes = JsonUtils.newObjectNode();
+    indexes.set("forward", forward);
+    return new FieldConfig.Builder(column)
+        .withEncodingType(FieldConfig.EncodingType.RAW)
+        .withIndexes(indexes)
+        .build();
   }
 
   private FieldIndexConfigs createFieldIndexConfigsFromMetadata(ColumnMetadata columnMetadata) {
