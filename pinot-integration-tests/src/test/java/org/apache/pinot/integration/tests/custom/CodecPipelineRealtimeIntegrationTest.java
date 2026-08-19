@@ -81,7 +81,7 @@ public class CodecPipelineRealtimeIntegrationTest extends CodecPipelineIntegrati
 
   @Override
   @Test
-  public void testGeneratedSegmentsUseV7() {
+  public void testGeneratedSegmentsUseConfiguredForwardIndexFormats() {
     String realtimeTableName = TableNameBuilder.REALTIME.tableNameWithType(getTableName());
     assertTrue(inspectImmutableSegments(realtimeTableName) > 0, "No committed V7 realtime segment was loaded");
   }
@@ -99,8 +99,8 @@ public class CodecPipelineRealtimeIntegrationTest extends CodecPipelineIntegrati
         for (SegmentDataManager segmentDataManager : segmentDataManagers) {
           IndexSegment segment = segmentDataManager.getSegment();
           if (segment instanceof ImmutableSegmentImpl) {
-            assertV7(segment, INT_COL, "LZ4");
-            assertV7(segment, LONG_COL, "DELTA,LZ4");
+            assertV7(segment, "intLz4", "LZ4");
+            assertV7(segment, "longDeltaLz4", "DELTA,LZ4");
             inspected++;
           }
         }
