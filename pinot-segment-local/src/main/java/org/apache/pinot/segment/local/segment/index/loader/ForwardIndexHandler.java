@@ -299,7 +299,9 @@ public class ForwardIndexHandler extends BaseIndexHandler {
   ///    `desiredDict = newIsDict || any-enabled-index-requires-dict`. The "force on if required" rule is the
   ///    only place this method consults other indexes — once `desiredDict` is computed, the rest of the logic
   ///    treats it as the source of truth.
-  /// 3. **Compression-type change** — only when no encoding change happened (forward + dict both unchanged).
+  /// 3. **Compression-type change** — whenever an existing RAW forward index remains RAW after the other
+  ///    operations. Adding/removing a standalone dictionary does not recreate that raw index, so a codec change
+  ///    must be queued alongside the dictionary operation.
   /// 4. **Cross-cutting guards** — sorted columns can't toggle forward; range index format is incompatible
   ///    with disabling the dictionary; enabling forward needs dict + inverted on disk; enabling dict needs
   ///    forward to be on so the dict can be bootstrapped.
